@@ -157,12 +157,15 @@ static void registerTouchCallback(void)
     for (int i = 0; i < [deviceList count]; i++) // iterate available devices
     {
         MTDeviceRef device = (MTDeviceRef)[deviceList objectAtIndex:i];
-//        int familyID;
-//        MTDeviceGetFamilyID(device, &familyID);
+        int familyID;
+        MTDeviceGetFamilyID(device, &familyID);
         
-//        if (familyIsMagicMouse(familyID)) {
+        if (familyIsMagicMouse(familyID)) {
             registerMTDeviceCallback(device, magicMouseTouchCallback);
-//        }
+            registerMTDeviceCallback(device, defaultTouchCallback);
+        } else {
+            registerMTDeviceCallback(device, defaultTouchCallback);
+        }
     }
 }
 
@@ -175,12 +178,14 @@ static void unregisterTouchCallback(void)
     for (int i = 0; i < [deviceList count]; i++) // iterate available devices
     {
         MTDeviceRef device = (MTDeviceRef)[deviceList objectAtIndex:i];
-//        int familyID;
-//        MTDeviceGetFamilyID(device, &familyID);
-//        
-//        if (familyIsMagicMouse(familyID)) {
+        int familyID;
+        MTDeviceGetFamilyID(device, &familyID);
+ 
+        if (familyIsMagicMouse(familyID)) {
             unregisterMTDeviceCallback(device, magicMouseTouchCallback);
-//        }
+        } else {
+            unregisterMTDeviceCallback(device, defaultTouchCallback);
+        }
     }
 }
 
@@ -200,11 +205,7 @@ static void unregisterTouchCallback(void)
     
     /// create eventTap which listens for core grpahic events with the filter
     /// specified above (so left mouse down and up again)
-    CFMachPortRef eventTap = CGEventTapCreate(kCGHIDEventTap, kCGHeadInsertEventTap, 0, eventMask, mouseCallback, NULL);
-    //    CFMachPortRef eventTap = CGEventTapCreate(
-    //                                              kCGHIDEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
-//                                              eventMask, mouseCallback, NULL);
-//    currentEventTap = eventTap;
+    CFMachPortRef eventTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, 0, eventMask, mouseCallback, NULL);
     
     if (eventTap) {
         CFRunLoopSourceRef runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0);
@@ -282,6 +283,9 @@ static void unregisterMouseCallback(void)
 CGEventRef mouseCallback(CGEventTapProxy proxy, CGEventType type,
                          CGEventRef event, void* __nullable userInfo)
 {
+    if (type == kCGEventLeftMouseUp) {
+        desktopShown = NO;
+    }
     if (needToClick) {
         if (threeDown && type == kCGEventLeftMouseDown) {
             wasThreeDown = YES;
@@ -306,16 +310,41 @@ CGEventRef mouseCallback(CGEventTapProxy proxy, CGEventType type,
     return event;
 }
 
-/// Mulittouch callback, see what is touched. If 3 are on the mouse set
-/// threedowns, else unset threedowns.
 int magicMouseTouchCallback(int device, Finger* data, int nFingers, double timestamp, int frame)
+{
+    int ignore = 0;
+    if (nFingers > 1) {
+        for (int i = 0; i < nFingers; i++) {
+            if (data[i].py < 0.3) {
+                data[i] = data[--nFingers];
+            }
+            
+            if ((data[i].px < 0.001 || data[i].px > 0.999) && data[i].size < 0.375000) {
+                data[i] = data[--nFingers];
+            }
+            
+            if (data[i].size > 5.5) {
+                ignore = 1;
+                break;
+            }
+        }
+    }
+
+    if (!ignore) {
+        magicMouseThreeFingerFlag = nFingers == 3;
+        
+        gestureMagicMouseSwipeThreeFingers(device, data, nFingers, timestamp, frame);
+    }
+    return 0;
+}
+
+int defaultTouchCallback(int device, Finger* data, int nFingers, double timestamp, int frame)
 {
     NSAutoreleasePool* pool = [NSAutoreleasePool new];
     fingersQua = [[NSUserDefaults standardUserDefaults] integerForKey:kFingersNum];
     float maxDistanceDelta = [[NSUserDefaults standardUserDefaults] floatForKey:kMaxDistanceDelta];
     float maxTimeDelta = [[NSUserDefaults standardUserDefaults] integerForKey:kMaxTimeDeltaMs] / 1000.f;
-    
-    gestureMagicMouseSwipeThreeFingers(device, data, nFingers, timestamp, frame);
+
     NSRunningApplication *currentApp = [NSWorkspace sharedWorkspace].frontmostApplication;
     
     if (needToClick) {
@@ -400,29 +429,6 @@ static bool familyIsMagicMouse(int familyID) {
 }
 
 static void gestureMagicMouseSwipeThreeFingers(int device, Finger *data, int nFingers, double timestamp, int thumbPresent) {
-    int ignore = 0;
-    if (nFingers > 1) {
-        for (int i = 0; i < nFingers; i++) {
-            if (data[i].py < 0.3) {
-                data[i] = data[--nFingers];
-            }
-            
-            if ((data[i].px < 0.001 || data[i].px > 0.999) && data[i].size < 0.375000) {
-                data[i] = data[--nFingers];
-            }
-            
-            if (data[i].size > 5.5) {
-                ignore = 1;
-                break;
-            }
-        }
-    }
-
-    if (ignore) {
-        return;
-    }
-    
-    magicMouseThreeFingerFlag = nFingers == 3;
     static double beforeendtime = -10;
     static double endtime = -1;
     static float startx[3], starty[3];
@@ -506,6 +512,7 @@ static void gestureMagicMouseSwipeThreeFingers(int device, Finger *data, int nFi
     lastNFingers = nFingers;
 }
 
+// TODO: Need to be rewritten using a dictionary
 bool desktopShown = NO;
 
 static void doCommand(NSString *gesture, int device) {
